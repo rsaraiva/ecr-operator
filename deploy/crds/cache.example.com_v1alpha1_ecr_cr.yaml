@@ -1,7 +1,6 @@
 apiVersion: cache.example.com/v1alpha1
 kind: ECR
 metadata:
-  name: batman
+  name: coringa
 spec:
-  # Add fields here
-  name: "batman"
+  name: coringa

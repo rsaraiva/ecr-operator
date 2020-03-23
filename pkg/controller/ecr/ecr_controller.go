@@ -3,6 +3,7 @@ package ecr
 import (
 	"context"
 	"os"
+	"strconv"
 
 	cachev1alpha1 "github.com/gympass/ecr-operator/pkg/apis/cache/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
@@ -92,12 +93,21 @@ func (r *ReconcileECR) Reconcile(request reconcile.Request) (reconcile.Result, e
 	// Fetch the ECR instance
 	instance := &cachev1alpha1.ECR{}
 	err := r.client.Get(context.TODO(), request.NamespacedName, instance)
+
+	log.Info("instance.Name " + instance.Name)
+	log.Info("request.NamespacedName.Name " + request.NamespacedName.Name)
+
 	if err != nil {
 		if errors.IsNotFound(err) {
 			// Request object not found, could have been deleted after reconcile request.
 			// Owned objects are automatically garbage collected. For additional cleanup logic use finalizers.
 			// Return and don't requeue
 			reqLogger.Info("ECR resource not found. Ignoring since object must be deleted")
+			deleteAwsECRErr := deleteAwsECR(request.NamespacedName.Name)
+			if deleteAwsECRErr != nil {
+				log.Error(deleteAwsECRErr, "Error deleting ECR repository")
+				return reconcile.Result{}, deleteAwsECRErr
+			}
 			return reconcile.Result{}, nil
 		}
 		// Error reading the object - requeue the request.
@@ -107,6 +117,7 @@ func (r *ReconcileECR) Reconcile(request reconcile.Request) (reconcile.Result, e
 
 	// check if already exists
 	repoExists, errAwsECRRepoExists := awsECRRepoExists(instance.Name)
+	reqLogger.Info("repoExists: " + strconv.FormatBool(repoExists))
 	if errAwsECRRepoExists != nil {
 		reqLogger.Error(errAwsECRRepoExists, "Error checking if repo exists")
 		return reconcile.Result{}, errAwsECRRepoExists
@@ -196,14 +207,39 @@ func awsECRRepoExists(repoName string) (bool, error) {
 		if aerr, ok := err.(awserr.Error); ok {
 			switch aerr.Code() {
 			case ecr.ErrCodeRepositoryNotFoundException:
+				log.Info("Repository not found!")
 				return false, nil
 			default:
+				log.Info("Repository default error!")
 				return false, err
 			}
 		} else {
+			log.Info("Repository not AWS error!")
 			return false, err
 		}
 	}
+	log.Info("Repository already exists. Skipping creation...")
+	return true, nil
+}
 
-	return false, nil
+func deleteAwsECR(repoName string) error {
+	log.Info("Deleting ECR")
+
+	config := &aws.Config{Region: aws.String(getAwsRegion())}
+	svc := ecr.New(session.New(), config)
+
+	input := &ecr.DeleteRepositoryInput{
+		RepositoryName: aws.String(repoName),
+		Force:          aws.Bool(false),
+	}
+
+	_, err := svc.DeleteRepository(input)
+
+	if err != nil {
+		log.Error(err, "Error deleting repo "+repoName)
+		return err
+	}
+
+	log.Info("ECR Repository deleted successfully! " + repoName)
+	return nil
 }
